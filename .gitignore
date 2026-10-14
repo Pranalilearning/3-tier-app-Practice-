@@ -1,6 +1,8 @@
 studyguideofproject
 node_modules
+coverage/
 DOCKER_ACTIVITY_README.md
+
 
 studyguideofproject/postgresql.md
 backend/server.out.log

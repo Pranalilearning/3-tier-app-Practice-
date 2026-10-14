@@ -2,6 +2,11 @@ const { body } = require("express-validator");
 
 const createItemValidation = [
   body("name")
+    .exists({ checkFalsy: false })
+    .withMessage("Name is required")
+    .bail()
+    .isString()
+    .withMessage("Name must be a string")
     .trim()
     .notEmpty()
     .withMessage("Name is required")
@@ -11,4 +16,4 @@ const createItemValidation = [
 
 module.exports = {
   createItemValidation,
-};
+};

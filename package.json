@@ -1,5 +1,19 @@
 {
+  "name": "cloud-native-aws-application",
+  "private": true,
+  "scripts": {
+    "test": "npm --prefix backend test && npm --prefix frontend test",
+    "test:backend": "npm --prefix backend test",
+    "test:backend:unit": "npm --prefix backend run test:unit",
+    "test:backend:integration": "npm --prefix backend run test:integration",
+    "test:backend:coverage": "npm --prefix backend run test:coverage",
+    "test:frontend": "npm --prefix frontend test",
+    "lint:frontend": "npm --prefix frontend run lint",
+    "build:frontend": "npm --prefix frontend run build",
+    "test:all": "npm --prefix backend run test:all && npm --prefix frontend test"
+  },
   "devDependencies": {
     "jest": "^30.4.2"
   }
 }
+

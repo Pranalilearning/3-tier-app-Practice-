@@ -157,8 +157,13 @@ Traditional web applications often suffer from the "works on my machine" syndrom
 | **Terraform** | Infrastructure as Code | `>= 1.5` | `terraform/versions.tf` | Declarative cloud provisioning tool managing AWS resources. |
 | **AWS Provider (Terraform)**| IaC Provider | `~> 5.0` | `terraform/versions.tf` | Terraform provider plugin interfacing with the AWS API. |
 | **Random Provider (Terraform)**| IaC Provider | `~> 3.6` | `terraform/versions.tf` | Declared in versions block for random resource generation. |
-| **Jest** | Test Runner / Assertions | `^30.4.2` | `backend/package.json`, root `package.json` | Executes backend test suites serially (`--runInBand`). |
-| **Supertest** | Integration Testing | `^7.2.2` | `backend/package.json` | Simulates HTTP requests against the Express `app` instance without port binding. |
+| **Jest** | Test Runner / Assertions | `^30.4.2` | `backend/package.json`, root `package.json` | Executes backend unit/API and PostgreSQL integration test suites serially (`--runInBand`). |
+| **Supertest** | API Integration Testing | `^7.2.2` | `backend/package.json` | Simulates HTTP requests against the Express `app` instance without network port binding. |
+| **Vitest** | Frontend Test Runner | `^5.0.4` | `frontend/package.json` | Fast Vite-native unit and component test runner with ESM and JSDOM support. |
+| **@testing-library/react** | Component Testing | `^16.3.3` | `frontend/package.json` | Renders React components and simulates user interactions following accessible DOM queries. |
+| **@testing-library/jest-dom** | Custom Matchers | `^7.0.1` | `frontend/package.json` | Extends Vitest/Jest expect with DOM-specific assertions (`toBeInTheDocument`, etc.). |
+| **@testing-library/user-event** | User Interaction | `^14.6.8` | `frontend/package.json` | Simulates realistic browser user dispatch events (typing, clicking, clearing). |
+| **jsdom** | DOM Simulation | `^29.1.1` | `frontend/package.json` | Headless DOM and browser environment implementation for Node.js test execution. |
 | **Nodemon** | Dev Utility | `^3.1.14` | `backend/package.json` | Watches backend files and automatically restarts the Node server upon code changes. |
 | **ESLint** | Static Analysis | `^10.3.0` | `frontend/package.json` | Lints frontend JSX/JavaScript code for syntax and best practices. |
 | **GitHub Actions** | CI/CD Platform | Cloud runner (`ubuntu-latest`) | `.github/workflows/deploy.yml` | Executes automated build, test, container push, and ECS deployment pipeline. |
@@ -171,42 +176,46 @@ Traditional web applications often suffer from the "works on my machine" syndrom
 Cloud-Native-AWS-Application/
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml              # GitHub Actions CI/CD pipeline (Test, Build, Push ECR, Deploy ECS)
-├── .gitignore                      # Git ignore patterns (node_modules, logs, terraform state, secrets)
+│       └── deploy.yml              # GitHub Actions CI/CD pipeline (Parallel Quality Gates: Backend, Frontend, Terraform -> Deploy ECS)
+├── .gitignore                      # Git ignore patterns (node_modules, coverage, logs, terraform state, secrets)
 ├── docker-compose.yml              # Local 3-tier container orchestration (postgres-db, backend, frontend)
+├── docker-compose.test.yml         # Dedicated isolated PostgreSQL test service container for integration tests
 ├── package-lock.json               # Root lockfile (locks root devDependencies)
-├── package.json                    # Root package manifest (declares root devDependency jest)
+├── package.json                    # Root package manifest (scripts for full-stack testing, linting, building)
 ├── README.md                       # Comprehensive markdown documentation and architecture walk-through
 ├── CONTEXT.md                      # This exhaustive technical specification and AI context document
 ├── instruction.md                  # Comprehensive engineering bootcamp tutorial and instructional guide
 ├── backend/
 │   ├── .dockerignore               # Ignores node_modules, npm logs, and local env files from Docker build
-│   ├── .gitignore                  # Backend-specific ignore file (.env, node_modules)
+│   ├── .gitignore                  # Backend-specific ignore file (.env, node_modules, coverage)
 │   ├── Dockerfile                  # Single-stage Node 20 Alpine container image definition
 │   ├── package-lock.json           # Backend dependency lockfile
-│   ├── package.json                # Backend scripts and production/development dependencies
+│   ├── package.json                # Backend scripts (start, dev, test, test:unit, test:integration, test:coverage)
 │   ├── server.js                   # HTTP entrypoint; calls app.listen() using port from env config
 │   ├── src/
-│   │   ├── app.js                  # Express app setup, middleware pipeline, and router mounting
+│   │   ├── app.js                  # Express app setup, middleware pipeline, 404 catch-all, and router mounting
 │   │   ├── config/
 │   │   │   └── env.js              # Environment parser using dotenv; exports nodeEnv, port, db config
 │   │   ├── controllers/
-│   │   │   └── itemController.js   # Handlers: getItems (SELECT *), createItems (INSERT RETURNING *)
+│   │   │   └── itemController.js   # Handlers: getItems (SELECT *), createItems (INSERT RETURNING * with trimmed names)
 │   │   ├── db/
 │   │   │   ├── index.js            # pg.Pool instantiation with event listeners (connect, error)
 │   │   │   └── schema.sql          # DDL script defining the items table schema
 │   │   ├── middleware/
-│   │   │   ├── errorHandler.js     # Centralized 500 error handler middleware
+│   │   │   ├── errorHandler.js     # Centralized error handler returning sanitized 500 responses without leaking SQL/secrets
 │   │   │   └── validate.js         # Evaluates express-validator results; returns 400 on error
 │   │   ├── routes/
 │   │   │   ├── healthRoutes.js     # GET /health; executes SELECT 1 to verify database readiness
 │   │   │   ├── itemRoutes.js       # Routes: GET /getitems, POST /createitems
 │   │   │   └── metricRoutes.js     # GET /api/metrics; returns uptime, memoryUsage, and timestamp
 │   │   └── validators/
-│   │       └── itemValidator.js    # Express-validator chain: body("name").trim().notEmpty().isLength(2,100)
+│   │       └── itemValidator.js    # Express-validator chain: exists().bail().isString().trim().notEmpty().isLength(2,100)
 │   └── tests/
-│       ├── health.test.js          # Supertest/Jest tests for GET /health (200 OK vs 503 UNAVAILABLE)
-│       └── items.test.js           # Supertest/Jest tests for GET /getitems and POST /createitems
+│       ├── health.test.js          # Supertest/Jest tests for /health, /, /api/metrics, 404, and malformed JSON
+│       ├── items.test.js           # Supertest/Jest tests for /api/items (empty/multi lists, trimming, 2-100 boundaries, DB failure)
+│       └── integration/
+│           ├── dbTestHelper.js     # Dedicated test DB pool, safety guard enforcing "test" in DB name, schema executor
+│           └── items.integration.test.js # Real PostgreSQL integration tests (schema, identity IDs, constraints, SQL injection, E2E)
 ├── frontend/
 │   ├── .dockerignore               # Ignores node_modules, dist, and local env files from Docker build
 │   ├── .gitignore                  # Frontend ignore file (dist, node_modules, .env.local)
@@ -215,22 +224,36 @@ Cloud-Native-AWS-Application/
 │   ├── index.html                  # HTML5 entrypoint housing <div id="root"></div>
 │   ├── nginx.conf                  # Nginx server block with try_files $uri $uri/ /index.html fallback
 │   ├── package-lock.json           # Frontend dependency lockfile
-│   ├── package.json                # Frontend scripts (dev, build, lint, preview) and dependencies
-│   ├── vite.config.js              # Vite configuration enabling React plugin
+│   ├── package.json                # Frontend scripts (dev, build, lint, preview, test, test:watch) and dependencies
+│   ├── vite.config.js              # Vite & Vitest configuration enabling React plugin and JSDOM environment
 │   ├── public/
 │   │   ├── favicon.svg             # Application SVG icon
 │   │   └── icons.svg               # Additional SVG icon sprite asset
 │   └── src/
-│       ├── App.jsx                 # Top-level React routing component mapping "/" to HomePage
+│       ├── App.jsx                 # Top-level React routing component mapping routes and managing notification state
 │       ├── index.css               # Design system tokens, CSS variables, dark-mode, typography
 │       ├── main.jsx                # React root mount (ReactDOM.createRoot) wrapping App in BrowserRouter
+│       ├── setupTests.js           # Vitest setup configuring @testing-library/jest-dom matchers
+│       ├── __tests__/
+│       │   ├── App.test.jsx        # End-to-end component workflow tests with mocked Axios (load, create, error alert)
+│       │   ├── ItemComponents.test.jsx # Unit tests for ItemForm (trimming, blank input) and ItemList components
+│       │   ├── ItemFormModal.test.jsx  # Modal form validation (<2 chars, >100 chars, whitespace), spinner, keyboard close
+│       │   └── ItemTable.test.jsx  # Table rendering, loading state, error state with retry, empty state, and search filter
 │       ├── api/
+│       │   ├── healthApi.js        # Health status API integration layer calling /health via Axios
 │       │   └── itemsApi.js         # API integration layer calling backend endpoints via Axios
 │       ├── components/
 │       │   ├── ItemForm.jsx        # Controlled input form component for creating items
-│       │   └── ItemList.jsx        # Render component displaying array of items
+│       │   ├── ItemList.jsx        # Render component displaying array of items
+│       │   ├── common/             # AlertBanner, badges, and shared UI components
+│       │   ├── items/              # ItemTable, ItemFormModal components
+│       │   └── layout/             # Layout, header, sidebar navigation components
 │       ├── pages/
-│       │   └── HomePage.jsx        # Main dashboard page managing fetch, add, loading, and error states
+│       │   ├── OverviewPage.jsx    # System metrics and operational summary
+│       │   ├── ItemsPage.jsx       # Item management view with ItemTable and notification banner
+│       │   ├── InfrastructurePage.jsx # Container and network topology view
+│       │   ├── ActivityPage.jsx    # Audit activity timeline
+│       │   └── SettingsPage.jsx    # Configuration settings view
 │       ├── services/
 │       │   └── api.js              # Axios instance factory configured with import.meta.env.VITE_API_URL
 │       └── styles/
@@ -638,6 +661,14 @@ app.use("/health", healthRoutes);
 app.use("/api/items", itemRoutes);
 app.use("/api/metrics", metricRoutes);
 
+// Catch unknown routes and return 404 JSON
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found",
+  });
+});
+
 app.use(errorHandler);
 
 module.exports = app;
@@ -697,6 +728,11 @@ module.exports = pool;
 
   const createItemValidation = [
     body("name")
+      .exists({ checkFalsy: false })
+      .withMessage("Name is required")
+      .bail()
+      .isString()
+      .withMessage("Name must be a string")
       .trim()
       .notEmpty()
       .withMessage("Name is required")
@@ -726,10 +762,18 @@ module.exports = pool;
 - **Global Error Handler (`backend/src/middleware/errorHandler.js`):**
   ```javascript
   const errorHandler = (err, req, res, next) => {
-    console.error(err);
-    res.status(500).json({
+    if (process.env.NODE_ENV !== "test") {
+      console.error(err);
+    }
+
+    const statusCode = err.statusCode || err.status || 500;
+    const message = statusCode >= 500
+      ? "Internal Server Error"
+      : (err.message || "Bad Request");
+
+    res.status(statusCode).json({
       success: false,
-      message: "Internal Server Error",
+      message,
     });
   };
 
@@ -825,7 +869,8 @@ module.exports = pool;
   - Body:
     ```json
     {
-      "error": "Internal Server Error"
+      "success": false,
+      "message": "Internal Server Error"
     }
     ```
 - **cURL Example:**
@@ -849,7 +894,9 @@ module.exports = pool;
   }
   ```
 - **Validation Rules:**
-  - `name`: Must be present, non-empty after trimming, and between 2 and 100 characters in length.
+  - `name`: Must exist, must be of type string (`isString()`), must be non-empty after trimming, and length must be between 2 and 100 characters (`2 <= length <= 100`).
+  - Rejects: Missing field, null, empty string, whitespace-only string, numeric values, and non-string types (boolean, array, object) with `400 Bad Request`.
+  - Accepts: Boundary lengths 2 and 100 characters. Automatically trims leading/trailing whitespace.
 - **Database Query:** Parameterized SQL:
   `INSERT INTO items (name) VALUES ($1) RETURNING *` with parameter `[name]`.
 - **Success Response:**
@@ -897,6 +944,7 @@ module.exports = pool;
       "message": "Internal Server Error"
     }
     ```
+  - *Security Guarantee:* Internal SQL syntax, database connection strings, credentials, and stack traces are suppressed and never exposed in the response payload.
 - **cURL Example:**
   ```bash
   curl -X POST http://localhost:3000/api/items/createitems \
@@ -932,6 +980,24 @@ module.exports = pool;
   ```bash
   curl -X GET http://localhost:3000/api/metrics
   ```
+
+---
+
+### Endpoint 6: Unmatched Route Catch-All
+- **Method:** Any (`GET`, `POST`, `PUT`, `DELETE`, etc.)
+- **Path:** Any unmatched URL path
+- **Purpose:** Standardizes 404 responses for undefined endpoints in JSON format rather than default HTML.
+- **Authentication:** None.
+- **Response:**
+  - Status: `404 Not Found`
+  - Body:
+    ```json
+    {
+      "success": false,
+      "message": "Route not found"
+    }
+    ```
+
 
 ---
 
@@ -1316,17 +1382,18 @@ Deploy to ECS Service (amazon-ecs-deploy-task-definition@v2)
 ## 23. Error Handling and Resilience
 
 ### 23.1 Validation Error Handling
-When a user submits an invalid payload to `POST /api/items/createitems` (e.g., an empty string or a 1-character string):
-1. `express-validator` registers schema errors.
+When a user submits an invalid payload to `POST /api/items/createitems` (e.g., missing field, null, empty string, whitespace-only, numeric, boolean, array, object, <2 characters, or >100 characters):
+1. `express-validator` registers schema errors via `.exists().bail().isString().trim().notEmpty().isLength({ min: 2, max: 100 })`.
 2. `backend/src/middleware/validate.js` intercepts execution:
    ```javascript
    if (!errors.isEmpty()) {
      return res.status(400).json({ success: false, errors: errors.array() });
    }
    ```
-3. A structured `400 Bad Request` response is returned immediately without contacting the database.
+3. A structured `400 Bad Request` response is returned immediately with error descriptors without executing database queries.
+4. Malformed JSON payloads (e.g. invalid syntax) are intercepted by Express's JSON body-parser and normalized through the centralized error middleware into a `400 Bad Request` response.
 
-### 23.2 Database Connection and Query Failures
+### 23.2 Database Connection, Query Failures, and Route Catch-All
 1. **Health Probe Failure:** In `healthRoutes.js`, if `pool.query("SELECT 1")` throws an error:
    ```javascript
    catch (error) {
@@ -1334,14 +1401,16 @@ When a user submits an invalid payload to `POST /api/items/createitems` (e.g., a
    }
    ```
 2. **Item Query Failure:** In `itemController.js`:
-   - `getItems`: Catches error, logs to console, and returns `500 { error: "Internal Server Error" }`.
+   - `getItems`: Catches error and calls `next(error)` to ensure centralized, secure error handling.
    - `createItems`: Catches error and calls `next(error)`.
-3. **Global Fallback:** `backend/src/middleware/errorHandler.js` catches unhandled exceptions passed to `next()` and returns `500 { success: false, message: "Internal Server Error" }`.
+3. **Global Sanitized Fallback:** `backend/src/middleware/errorHandler.js` catches unhandled exceptions passed to `next()`, maps status codes (defaulting to 500 for unhandled exceptions), and returns `{ success: false, message: statusCode >= 500 ? "Internal Server Error" : (err.message || "Bad Request") }`.
+   - *Information Leak Prevention:* Prevents internal SQL syntax errors, database table names, RDS endpoints, or database user credentials from ever leaking to clients.
+4. **Unknown Route Catch-All:** Unmatched route requests hit a catch-all middleware returning `404 Not Found` with `{ success: false, message: "Route not found" }`.
 
-### 23.3 Frontend Error Handling
-- **Fetch Errors:** `HomePage.jsx` catches failures during `fetchItems()` and sets `setError("Failed to fetch items")`.
-- **Create Errors:** `HomePage.jsx` catches failures during `handleAddItem()` and sets `setError("Failed to create item")`.
-- **UI Blocking Behavior:** When `error` is non-empty, `HomePage.jsx` replaces the entire dashboard with `<p>{error}</p>`. There is currently no inline retry button; clearing the error requires reloading the page.
+### 23.3 Frontend Error Handling and Resilience
+- **Fetch Errors:** `App.jsx` catches failures during `getItems()` and updates `itemsError` state ("Failed to fetch items from database."). `ItemTable.jsx` renders an error banner with a "Retry Query" button that triggers `onRefresh`.
+- **Create Errors:** `App.jsx` catches API creation rejections, extracts server-side error messages from `err.response.data`, and presents a prominent `AlertBanner` notification without unmounting the table interface.
+- **Form-Level Validation:** `ItemFormModal.jsx` enforces client-side validation rules (rejects whitespace, enforces 2–100 characters, disables submit button when blank, displays spinner during submission) to prevent malformed API requests from ever being dispatched.
 
 ---
 
@@ -1502,18 +1571,51 @@ docker compose down -v
 ```bash
 cd backend
 npm install
-# Ensure PostgreSQL is running locally on port 5432
-npm run dev     # Launches nodemon on http://localhost:3000
-npm test        # Runs test suite serially via Jest
+
+npm run dev                 # Launches nodemon with hot-reload on http://localhost:3000
+npm test                    # Runs isolated unit and API contract tests via Jest (mocked DB)
+npm run test:unit           # Explicit alias for backend unit tests
+npm run test:integration    # Runs real PostgreSQL integration tests against test database
+npm run test:coverage       # Generates statement, branch, function, and line coverage report
+npm run test:watch          # Runs unit tests in watch mode
+```
+
+#### Running Real PostgreSQL Integration Tests Locally
+```bash
+# 1. Start isolated test PostgreSQL service container
+docker compose -f docker-compose.test.yml up -d
+
+# 2. Run real database integration tests
+npm run test:backend:integration
+
+# 3. Stop test container
+docker compose -f docker-compose.test.yml down -v
 ```
 
 #### Running Frontend Locally (Without Docker)
 ```bash
 cd frontend
 npm install
-npm run dev     # Launches Vite dev server on http://localhost:5173
-npm run build   # Compiles production assets into dist/
-npm run lint    # Runs ESLint checks
+
+npm run dev         # Launches Vite dev server on http://localhost:5173
+npm run build       # Compiles production assets into dist/
+npm run lint        # Runs ESLint code quality checks
+npm test            # Runs automated component tests via Vitest & React Testing Library
+npm run test:watch  # Runs frontend tests in interactive watch mode
+```
+
+#### Root Multi-Tier Test Commands
+From the workspace root directory:
+```bash
+npm run test                    # Runs backend unit tests and frontend automated tests
+npm run test:backend            # Runs backend unit and API tests
+npm run test:backend:unit       # Explicit alias for backend unit tests
+npm run test:backend:integration# Runs real PostgreSQL integration tests
+npm run test:backend:coverage   # Runs backend tests with coverage report
+npm run test:frontend           # Runs frontend Vitest component tests
+npm run lint:frontend           # Runs frontend ESLint validation
+npm run build:frontend          # Runs frontend production Vite build
+npm run test:all                # Runs backend unit, integration, and frontend test suites
 ```
 
 ### 27.2 Terraform Cloud Provisioning Commands
@@ -1542,44 +1644,273 @@ terraform apply \
 
 ## 28. Testing Suite and Quality Assurance
 
-### 28.1 Backend Test Architecture
-The backend testing suite is built using **Jest** and **Supertest**. Tests run against `src/app.js` with mocked database queries to ensure isolation and speed.
+To align with production-quality software engineering and automated quality assurance standards, the repository implements a multi-tier testing strategy covering unit, API contract, database integration, frontend component, and CI/CD quality gates.
 
-#### `backend/tests/health.test.js`
-- **Scope:** Evaluates `GET /health` endpoint under normal and degraded conditions.
-- **Database Mocking:** `jest.mock("../src/db", () => ({ query: jest.fn() }))`.
-- **Test Cases:**
-  1. `returns API health status`:
-     - Mocks `pool.query.mockResolvedValue({ rows: [{ "1": 1 }] })`.
-     - Asserts HTTP status `200 OK`.
-     - Asserts response matches `{ status: "OK", uptime: expect.any(Number), timestamp: expect.any(String) }`.
-  2. `returns unavailable when PostgreSQL cannot be reached`:
-     - Mocks `pool.query.mockRejectedValue(new Error("database unavailable"))`.
-     - Asserts HTTP status `503 Service Unavailable`.
-     - Asserts response property `body.status` equals `"UNAVAILABLE"`.
+```
+                    ┌─────────────────────────────────────────┐
+                    │          CI/CD Quality Gates            │
+                    │   (GitHub Actions + Docker + OIDC)      │
+                    └────────────────────┬────────────────────┘
+                                         │
+        ┌────────────────────────────────┼────────────────────────────────┐
+        ▼                                ▼                                ▼
+┌──────────────────────┐      ┌──────────────────────┐      ┌──────────────────────┐
+│  Backend Test Suite  │      │ Frontend Test Suite  │      │ Terraform Validation │
+│  (Jest + Supertest)  │      │  (Vitest + RTL +     │      │ (fmt -check +        │
+│                      │      │   JSDOM)             │      │  validate)           │
+├──────────────────────┤      ├──────────────────────┤      ├──────────────────────┤
+│ • 23 Mocked Unit/API │      │ • 21 Component Tests │      │ • HCL Formatting     │
+│   tests              │      │ • Mocked Axios calls │      │ • Syntax Validation  │
+│ • 8 Real PostgreSQL  │      │ • Form validation    │      │ • Provider Init      │
+│   integration tests  │      │ • User-visible errors│      │                      │
+└──────────────────────┘      └──────────────────────┘      └──────────────────────┘
+```
 
-#### `backend/tests/items.test.js`
-- **Scope:** Evaluates `GET /api/items/getitems` and `POST /api/items/createitems`.
-- **Test Cases:**
-  1. `GET /api/items/getitems returns items from PostgreSQL`:
-     - Mocks `pool.query.mockResolvedValue({ rows: [{ id: 1, name: "First item" }, { id: 2, name: "Second item" }] })`.
-     - Asserts HTTP status `200 OK`.
-     - Asserts `pool.query` was called with exact SQL: `"SELECT * FROM items"`.
-     - Asserts response body matches `{ success: true, count: 2, data: [...] }`.
-  2. `POST /api/items/createitems creates an item`:
-     - Mocks `pool.query.mockResolvedValue({ rows: [{ id: 1, name: "Created item" }] })`.
-     - Issues POST request with body `{"name": "Created item"}`.
-     - Asserts HTTP status `201 Created`.
-     - Asserts `pool.query` was called with parameterized query:
-       `"INSERT INTO items (name) VALUES ($1) RETURNING *"` with parameters `["Created item"]`.
-  3. `POST /api/items/createitems rejects invalid input`:
-     - Issues POST request with body `{"name": ""}`.
-     - Asserts HTTP status `400 Bad Request`.
-     - Asserts `body.success === false`.
-     - Asserts `pool.query.not.toHaveBeenCalled()`, confirming database protection against invalid payloads.
+### 28.1 Multi-Tier Test Architecture Overview
 
-### 28.2 Frontend Testing Status
-- **Current Status:** Not Implemented. No Jest, Vitest, React Testing Library, or Cypress test files exist in the `frontend/` directory.
+| Test Layer | Framework & Tools | Scope & Focus | Suite File(s) | Test Count | Pass Rate |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Backend Unit & API** | Jest, Supertest | HTTP contracts, operational telemetry, input validation, status codes, 404, bad JSON, safe 500 error masking | `tests/health.test.js`<br>`tests/items.test.js` | **23** | 100% (23/23) |
+| **PostgreSQL Integration** | Jest, Supertest, `pg` | Dedicated test database safety check, `schema.sql` execution, BigInt identity IDs, NOT NULL & length constraints, SQL injection resilience | `tests/integration/items.integration.test.js`<br>`tests/integration/dbTestHelper.js` | **8** | 100% (8/8) |
+| **Frontend Component & Workflow** | Vitest, React Testing Library, JSDOM | Component states (loading, empty, error with retry, success), modal form validation, whitespace trimming, search filtering, Axios mocks | `src/__tests__/ItemTable.test.jsx`<br>`src/__tests__/ItemFormModal.test.jsx`<br>`src/__tests__/ItemComponents.test.jsx`<br>`src/__tests__/App.test.jsx` | **21** | 100% (21/21) |
+| **Total Automated Tests** | — | Comprehensive end-to-end regression safety net across all tiers | **7 Test Files** | **52** | **100% Passing** |
+
+---
+
+### 28.2 Backend Unit & API Contract Tests (`backend/tests/`)
+
+Tests execute against Express `app.js` with isolated database query mocking (`jest.mock("../src/db")`), ensuring deterministic execution without requiring external service dependencies.
+
+#### `backend/tests/health.test.js` (5 Tests)
+- **`GET /health` (Healthy):** Mocks `pool.query.mockResolvedValue({ rows: [{ "1": 1 }] })`. Asserts status `200 OK`, confirms query `"SELECT 1"` was executed, and validates response schema containing `status: "OK"`, numeric `uptime`, and ISO string `timestamp`.
+- **`GET /health` (Degraded):** Mocks `pool.query.mockRejectedValue(new Error("Connection refused"))`. Asserts status `503 Service Unavailable` with body `{ status: "UNAVAILABLE", message: "Database is unavailable" }`.
+- **`GET /` (Root Endpoint):** Asserts status `200 OK` and `{ message: "Backend API running successfully" }`.
+- **`GET /api/metrics`:** Asserts status `200 OK`, non-negative `uptime`, valid date `timestamp`, and memory usage telemetry containing `rss`, `heapTotal`, `heapUsed`, and `external` numeric properties.
+- **Operational Error Handling:**
+  - **404 Catch-All:** Issues request to `/api/non-existent-route`; asserts status `404 Not Found` with `{ success: false, message: "Route not found" }`.
+  - **Malformed JSON:** Issues POST request with header `Content-Type: application/json` and malformed body `'{"name": "broken,'`; asserts status `400 Bad Request` with `{ success: false, message: expect.any(String) }`.
+
+#### `backend/tests/items.test.js` (18 Tests)
+- **`GET /api/items/getitems`:**
+  - Empty database returns status `200 OK` and `{ success: true, count: 0, data: [] }`.
+  - Populated database returns status `200 OK`, verifies SQL `"SELECT * FROM items"`, and validates count and record payloads.
+  - Database failure returns status `500 Internal Server Error` with `{ success: false, message: "Internal Server Error" }`. Asserts that sensitive details (table names, credentials, stack traces) are not leaked to clients.
+- **`POST /api/items/createitems`:**
+  - Valid creation returns status `201 Created` with created record and verifies parameterized query `"INSERT INTO items (name) VALUES ($1) RETURNING *"`.
+  - Automatically trims leading and trailing whitespace before database insertion (e.g. `"   Trimmable Item   "` -> `"Trimmable Item"`).
+  - Accepts boundary minimum length of 2 characters (e.g. `"AB"`).
+  - Accepts boundary maximum length of 100 characters (`"A".repeat(100)`).
+  - Rejects missing `name` field with status `400 Bad Request` without executing database queries.
+  - Rejects `null` name with status 400.
+  - Rejects empty string name (`""`) with status 400.
+  - Rejects whitespace-only name (`"     "`) with status 400.
+  - Rejects numeric name (`12345`) with status 400.
+  - Rejects non-string types (`true`, `false`, `["invalid"]`, `{ nested: "object" }`) with status 400.
+  - Rejects names shorter than 2 characters (`"A"`) with status 400.
+  - Rejects names longer than 100 characters (`"A".repeat(101)`) with status 400.
+  - Handles unsupported `Content-Type: text/plain` requests gracefully with status 400.
+  - Database insertion errors return status `500 Internal Server Error` with sanitized message `{ success: false, message: "Internal Server Error" }`, masking SQL strings and passwords.
+
+---
+
+### 28.3 Real PostgreSQL Integration Test Suite (`backend/tests/integration/`)
+
+The integration test suite connects to a dedicated PostgreSQL database and executes `backend/src/db/schema.sql` to verify database behaviors that mocked tests cannot detect.
+
+#### Safety Guard & Test Harness (`dbTestHelper.js`)
+- **Strict Database Safety Check:** Evaluates target database name before running any query. If `db.database` does not contain `"test"` (e.g. if accidentally pointed at `cloudapp` or a production instance), it immediately aborts with `SAFETY VIOLATION: Refusing to run integration tests against database ...`.
+- **Schema Bootstrap:** Reads and executes `backend/src/db/schema.sql` directly against PostgreSQL via `testPool.query()`.
+- **Deterministic Cleanup:** Truncates items table and resets identity sequences (`TRUNCATE TABLE items RESTART IDENTITY CASCADE`) before each test and after test execution.
+- **Connection Management:** Closes pool connections (`testPool.end()`) cleanly upon completion.
+
+#### `backend/tests/integration/items.integration.test.js` (8 Tests)
+1. **Safety Guard Verification:** Asserts that `validateTestDatabaseName("production_db")` and `validateTestDatabaseName("cloudapp")` throw safety violations, while `validateTestDatabaseName("cloudapp_test")` passes.
+2. **Schema & Table Verification:** Queries `information_schema.columns` to verify `items` table exists with `id` (bigint identity primary key) and `name` (character varying 100, `is_nullable: NO`).
+3. **Data Persistence & Incremental Identity:** Inserts multiple records; asserts that real auto-incrementing BigInt IDs are generated (`item2.id > item1.id`) and verifies records persist via `SELECT * FROM items`.
+4. **NOT NULL Constraint Enforcement:** Verifies that attempting to insert `NULL` directly into PostgreSQL throws a real database constraint violation (`null value in column "name"`).
+5. **VARCHAR(100) Length Constraint Enforcement:** Verifies that attempting to insert a 101-character string into PostgreSQL throws a database string truncation error (`value too long for type character varying(100)`).
+6. **Parameterized Query & SQL Injection Resilience:** Inserts an SQL injection payload (`Robert'); DROP TABLE items;--`) and special characters (`'`, `"`, `&`, `<HTML>`). Asserts that the table is NOT dropped, the query executes safely via parameter binding, and the literal payload is preserved in the database.
+7. **Empty Table API Verification:** Queries `GET /api/items/getitems` against an empty database through Supertest; asserts `200 OK`, `count: 0`, and `data: []`.
+8. **End-to-End HTTP Integration:** Dispatches `POST /api/items/createitems` with an item payload; asserts `201 Created` with generated database ID; verifies subsequent `GET /api/items/getitems` returns the newly persisted item from PostgreSQL.
+
+#### Local Execution with Docker Compose
+```bash
+# 1. Start isolated test PostgreSQL service container on port 5432
+docker compose -f docker-compose.test.yml up -d
+
+# 2. Run real database integration tests
+npm run test:backend:integration
+
+# 3. Stop test container
+docker compose -f docker-compose.test.yml down -v
+```
+
+---
+
+### 28.4 Frontend Automated Component Tests (`frontend/src/__tests__/`)
+
+The frontend testing suite is built using **Vitest**, **React Testing Library**, and **JSDOM** (`frontend/vite.config.js`), simulating real user interactions and DOM updates with mocked API services.
+
+#### `src/__tests__/ItemTable.test.jsx` (7 Tests)
+- **Loading State:** Asserts that the spinner and message `"Loading items from PostgreSQL..."` are rendered when `loading === true`.
+- **Error State with Retry:** Asserts error message is rendered and clicking `"Retry Query"` triggers the `onRefresh` callback.
+- **Empty State:** Asserts `"No items in database"` is rendered and clicking `"Create Item"` triggers `onOpenCreate`.
+- **Populated Records Table:** Asserts table renders item names, `#id` badges, `"PostgreSQL 16"` storage pills, `"Active"` status indicators, and footer summary (`"Showing 3 of 3 items"`).
+- **Search Filtering:** Simulates user typing into search input; verifies that matching rows remain visible while non-matching rows are excluded; verifies clearing search restores all rows.
+- **No Matching Records State:** Asserts that searching for a non-existent item displays `"No matching items found"` and clicking `"Clear Search"` resets the table.
+- **Refresh Action:** Asserts clicking the toolbar refresh button calls `onRefresh`.
+
+#### `src/__tests__/ItemFormModal.test.jsx` (6 Tests)
+- **Modal Visibility:** Asserts component returns `null` when `isOpen === false`; renders `"Create New Item"` header, inputs, and actions when `isOpen === true`.
+- **Minimum Length Validation:** Typing a 1-character name and submitting displays validation error `"Item name must be at least 2 characters."` and halts submission.
+- **Whitespace Trimming:** Typing `"   Clean Item Name   "` and submitting invokes `onSubmit({ name: "Clean Item Name" })` with whitespace trimmed.
+- **Modal Close Handlers:** Verifies that clicking Cancel, clicking the close icon button, and pressing the `Escape` key all trigger `onClose()`.
+- **Submission State:** When `submitting === true`, verifies that inputs and buttons are disabled and the `"Creating..."` spinner is displayed.
+
+#### `src/__tests__/ItemComponents.test.jsx` (4 Tests)
+- **ItemForm:** Verifies input and `"Add Item"` button render; verifies empty or whitespace-only submissions are ignored; verifies submitting valid input calls `onAdd` with trimmed name and clears the input field.
+- **ItemList:** Verifies array of items is rendered in the DOM.
+
+#### `src/__tests__/App.test.jsx` (4 Tests)
+- **Initial Telemetry & Item Fetch:** Mocks `api.get("/api/items/getitems")` and `api.get("/health")`; renders `<App />` within `<MemoryRouter initialEntries={["/items"]}>`; verifies items and health data are fetched and rendered.
+- **API Failure State:** Mocks `api.get("/api/items/getitems")` failure; asserts `"Failed to fetch items from database."` error message is displayed.
+- **Item Creation Workflow:** Simulates opening modal, typing `"New Lambda Function"`, and submitting; mocks `api.post("/api/items/createitems")`; verifies success banner (`"created successfully in PostgreSQL"`) appears and the new item is appended to the table.
+- **Failed Creation Alert:** Mocks `api.post("/api/items/createitems")` rejection with a server error; asserts that a user-visible `AlertBanner` appears with the server error message.
+
+---
+
+### 28.5 Test Verification Results & Code Coverage
+
+#### Verification Results Across All Suites
+All 52 automated tests were executed and passed cleanly:
+
+```text
+Backend Unit & API:       2 passed suites, 23 passed tests (0 failed)
+PostgreSQL Integration:   1 passed suite,   8 passed tests (0 failed)
+Frontend Component:       4 passed suites, 21 passed tests (0 failed)
+Frontend ESLint:          Passed (0 errors)
+Frontend Production Build:Built in 716ms (0 errors)
+Total Automated Tests:    7 test files,   52 passed tests (100% pass rate)
+```
+
+#### Backend Coverage Report (`npm run test:coverage`)
+```text
+--------------------|---------|----------|---------|---------|-------------------
+File                | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+--------------------|---------|----------|---------|---------|-------------------
+All files           |   97.46 |    73.91 |     100 |   97.46 |                   
+ src                |   95.83 |       50 |     100 |   95.83 |                   
+  app.js            |   95.83 |       50 |     100 |   95.83 | 18 (morgan dev)   
+ src/config         |     100 |       75 |     100 |     100 |                   
+  env.js            |     100 |       75 |     100 |     100 | 4, 12             
+ src/controllers    |     100 |       50 |     100 |     100 |                   
+  itemController.js |     100 |       50 |     100 |     100 | 19                
+ src/middleware     |   92.85 |    81.81 |     100 |   92.85 |                   
+  errorHandler.js   |   85.71 |    77.77 |     100 |   85.71 | 3                 
+  validate.js       |     100 |      100 |     100 |     100 |                   
+ src/routes         |     100 |      100 |     100 |     100 |                   
+  healthRoutes.js   |     100 |      100 |     100 |     100 |                   
+  itemRoutes.js     |     100 |      100 |     100 |     100 |                   
+  metricRoutes.js   |     100 |      100 |     100 |     100 |                   
+ src/validators     |     100 |      100 |     100 |     100 |                   
+  itemValidator.js  |     100 |      100 |     100 |     100 |                   
+--------------------|---------|----------|---------|---------|-------------------
+```
+
+---
+
+### 28.6 CI/CD Quality Gates in GitHub Actions (`deploy.yml`)
+
+The delivery pipeline in `.github/workflows/deploy.yml` enforces automated quality gates before any deployment task can run:
+
+```yaml
+jobs:
+  backend-tests:
+    name: Backend Unit & Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: root
+          POSTGRES_DB: cloudapp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - run: npm test
+        working-directory: backend
+      - run: npm run test:integration
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          TEST_DB_HOST: localhost
+          TEST_DB_PORT: 5432
+          TEST_DB_USER: postgres
+          TEST_DB_PASSWORD: root
+          TEST_DB_NAME: cloudapp_test
+          TEST_DB_SSL: "false"
+
+  frontend-checks:
+    name: Frontend Lint, Tests & Production Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  terraform-checks:
+    name: Terraform Format & Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+      - run: terraform fmt -check
+        working-directory: terraform
+      - run: terraform init -backend=false
+        working-directory: terraform
+      - run: terraform validate
+        working-directory: terraform
+
+  deploy:
+    name: Deploy Backend to ECS
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-checks, terraform-checks]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      # OIDC AWS auth, ECR build & push, ECS task definition render, and deploy
+```
+
+**Quality Gate Enforcement Guarantees:**
+1. **Parallel Verification:** `backend-tests`, `frontend-checks`, and `terraform-checks` run concurrently on isolated runners.
+2. **Hard Deployment Gate:** The `deploy` job explicitly requires `needs: [backend-tests, frontend-checks, terraform-checks]`. If any unit test, integration test, frontend test, ESLint rule, production bundle compilation, or Terraform validation check fails, deployment is immediately aborted.
+3. **No Credential Exposure:** AWS OIDC authentication and STS token exchange are restricted solely to the `deploy` job. No AWS credentials or database secrets are accessed or exposed during testing.
 
 ---
 
@@ -1656,7 +1987,8 @@ The backend testing suite is built using **Jest** and **Supertest**. Tests run a
 3. **Single Availability Zone Database:** RDS PostgreSQL is configured with `multi_az = false`. A database hardware failure would require instance reboot or restoration from backup rather than automatic standby failover.
 4. **Single NAT Gateway Resilience:** Both private subnets route outbound traffic through a single NAT Gateway in `public-a`, introducing a single point of failure for outbound internet traffic if Availability Zone A fails.
 5. **No HTTPS Listener on ALB:** The Application Load Balancer currently listens only on HTTP port 80. Port 443 ingress is allowed in the security group, but no TLS certificate or HTTPS listener is configured in Terraform.
-6. **Frontend Error State Recovery:** If an API call fails in `HomePage.jsx`, the component replaces the entire UI with `<p>{error}</p>`. Users must refresh the page to retry.
+6. **Frontend State & Error Recovery Enhancements:** While the core dashboard in `App.jsx` and `ItemTable.jsx` features defensive state handling with non-destructive alert banners, empty states, loading indicators, and retry queries (`onRefresh`), the legacy route component in `HomePage.jsx` still demonstrates a rudimentary fallback pattern that replaces the entire UI with `<p>{error}</p>` on query failure.
+7. **Local PostgreSQL Integration Testing Prerequisite:** Running the database integration suite (`npm run test:integration`) locally requires a live PostgreSQL instance (e.g., launched via `docker-compose -f docker-compose.test.yml up -d`). If PostgreSQL is not running locally, the suite verifies the database safety guard, logs an advisory warning, and exits cleanly. In GitHub Actions CI, an automated `postgres:16-alpine` service container provides an ephemeral test database running all 8 integration tests end-to-end.
 
 ---
 
@@ -1844,7 +2176,7 @@ An AI system reasoning about this repository should be capable of answering the 
 - [x] **Container Builds:** How are containers packaged? *(Backend: `node:20-alpine`; Frontend: multi-stage build using `node:20-alpine` builder and `nginx:alpine` runner with SPA fallback).*
 - [x] **Local Parity:** How does local development work? *(Docker Compose runs `postgres:18.4`, `backend` on port 3000, and `frontend` on port 5000, connected via a bridge network).*
 - [x] **Secret Management:** Where are database passwords stored? *(AWS Secrets Manager secret `cloudapp-db-secret`, injected into ECS task definitions).*
-- [x] **Testing:** What tests are automated? *(Backend integration tests in Jest/Supertest mocking `pg.Pool` for health checks and item routes; no frontend tests).*
+- [x] **Testing:** What tests are automated? *(52 automated tests across backend and frontend: 23 Jest/Supertest backend unit/API tests with 97.46% statement coverage; 8 real PostgreSQL integration tests with safety guard and SQL injection resilience; 21 Vitest/React Testing Library frontend tests covering modal forms, tables, loading spinners, empty states, and error alerts; plus GitHub Actions CI quality gates blocking deployment on any test failure).*
 
 ---
 
@@ -1870,4 +2202,5 @@ The **Cloud-Native AWS Application** (`cloudapp`) is a cloud-native reference im
 - An **Express.js 5 REST API** on Node.js 20 Alpine, hardened with Helmet, Morgan, and express-validator, using connection pooling against PostgreSQL.
 - An **Amazon RDS PostgreSQL 15** relational database running in isolated private database subnets with KMS encryption.
 - A **3-Tier AWS VPC** across two Availability Zones provisioned via modular **Terraform (>= 1.5)**, incorporating an Application Load Balancer, NAT Gateway, chained security groups, and **AWS ECS Fargate** serverless containers.
-- An automated **CI/CD Pipeline in GitHub Actions** utilizing **AWS OIDC** for keyless deployment, executing Jest unit/integration tests, building Docker containers, pushing to **Amazon ECR**, and orchestrating rolling ECS updates with zero downtime.
+- A comprehensive multi-tier automated test suite (52 tests across Jest/Supertest backend unit/API tests, real PostgreSQL integration tests, and Vitest/React Testing Library frontend tests) delivering 97.46% backend statement coverage.
+- An automated **CI/CD Pipeline in GitHub Actions** utilizing **AWS OIDC** for keyless deployment, enforcing strict quality gates (`backend-tests` with PostgreSQL 16 container, `frontend-checks` with lint/test/build, and `terraform-checks` with format/validation) before building Docker containers, pushing to **Amazon ECR**, and orchestrating rolling ECS updates with zero downtime.

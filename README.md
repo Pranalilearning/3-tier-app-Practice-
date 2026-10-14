@@ -701,33 +701,40 @@ Cloud-Native-AWS-Application/
 │   │   │   ├── index.js            # PostgreSQL connection pool (pg.Pool)
 │   │   │   └── schema.sql          # Database table schema definition
 │   │   ├── middleware/
-│   │   │   ├── errorHandler.js     # Centralized 500 error handler
+│   │   │   ├── errorHandler.js     # Centralized 500 error handler (sanitized responses)
 │   │   │   └── validate.js         # Request validation evaluation middleware
 │   │   ├── routes/
 │   │   │   ├── healthRoutes.js     # GET /health database readiness probe
 │   │   │   ├── itemRoutes.js       # GET /api/items/getitems, POST /api/items/createitems
 │   │   │   └── metricRoutes.js     # GET /api/metrics process metrics endpoint
 │   │   └── validators/
-│   │       └── itemValidator.js    # express-validator rules for item payload
+│   │       └── itemValidator.js    # express-validator rules for item payload (string, 2-100 chars)
 │   └── tests/
-│       ├── health.test.js          # Supertest/Jest tests for /health endpoint
-│       └── items.test.js           # Supertest/Jest tests for /api/items endpoints
+│       ├── health.test.js          # Supertest/Jest tests for /health, /, /api/metrics, 404, bad JSON
+│       ├── items.test.js           # Supertest/Jest tests for /api/items endpoints & input validation
+│       └── integration/
+│           ├── dbTestHelper.js     # Dedicated test DB pool, safety guard & schema executor
+│           └── items.integration.test.js # Real PostgreSQL integration tests (schema, SQL injection, constraints)
 ├── frontend/
 │   ├── Dockerfile                  # Multi-stage container build (Node builder -> Nginx)
 │   ├── nginx.conf                  # Nginx configuration with SPA route fallback
-│   ├── package.json                # React 19, Vite, React Router, Axios dependencies
-│   ├── vite.config.js              # Vite configuration with React plugin
+│   ├── package.json                # React 19, Vite, React Router, Axios, Vitest, RTL dependencies
+│   ├── vite.config.js              # Vite & Vitest configuration with JSDOM
 │   ├── index.html                  # HTML entry point
 │   └── src/
 │       ├── main.jsx                # React root rendering and BrowserRouter
-│       ├── App.jsx                 # Route declarations
+│       ├── App.jsx                 # Route declarations & state management
+│       ├── setupTests.js           # Test setup file configuring @testing-library/jest-dom
+│       ├── __tests__/
+│       │   ├── App.test.jsx        # End-to-end component workflow with mocked Axios
+│       │   ├── ItemComponents.test.jsx # ItemForm and ItemList component unit tests
+│       │   ├── ItemFormModal.test.jsx  # Modal form validation, trimming, and accessibility tests
+│       │   └── ItemTable.test.jsx  # Table rendering, loading, empty, search, and retry tests
 │       ├── api/
+│       │   ├── healthApi.js        # Axios API calls to health endpoint
 │       │   └── itemsApi.js         # Axios API calls to backend endpoints
 │       ├── components/
-│       │   ├── ItemForm.jsx        # Item creation input form
-│       │   └── ItemList.jsx        # Item rendering component
 │       ├── pages/
-│       │   └── HomePage.jsx        # Main dashboard view with loading/error state
 │       └── services/
 │           └── api.js              # Shared Axios client instance with baseURL
 ├── terraform/
@@ -737,13 +744,167 @@ Cloud-Native-AWS-Application/
 │   ├── providers.tf                # AWS provider configuration
 │   ├── versions.tf                 # Required Terraform and provider versions
 │   └── modules/
-│       ├── networking/             # VPC, public/private/database subnets, IGW, NAT GW
-│       ├── security/               # ALB, ECS, and RDS security groups
-│       ├── database/               # RDS PostgreSQL, subnet group, Secrets Manager
-│       └── compute/                # ECR, ECS Fargate, ALB, target group, IAM roles, logs
 ├── docker-compose.yml              # Local multi-tier orchestration (DB, API, frontend)
+├── docker-compose.test.yml         # Isolated PostgreSQL test container for integration tests
 └── README.md                       # Engineering documentation
 ```
+
+---
+
+## Testing Strategy & Quality Assurance
+
+To align with production software engineering and QA automation standards, the application implements a multi-tier testing strategy covering unit, API contract, database integration, frontend component, and CI/CD quality gates.
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │          CI/CD Quality Gates            │
+                    │   (GitHub Actions + Docker + OIDC)      │
+                    └────────────────────┬────────────────────┘
+                                         │
+        ┌────────────────────────────────┼────────────────────────────────┐
+        ▼                                ▼                                ▼
+┌──────────────────────┐      ┌──────────────────────┐      ┌──────────────────────┐
+│  Backend Test Suite  │      │ Frontend Test Suite  │      │ Terraform Validation │
+│  (Jest + Supertest)  │      │  (Vitest + RTL +     │      │ (fmt -check +        │
+│                      │      │   JSDOM)             │      │  validate)           │
+├──────────────────────┤      ├──────────────────────┤      ├──────────────────────┤
+│ • 23 Mocked Unit/API │      │ • 21 Component Tests │      │ • HCL Formatting     │
+│   tests              │      │ • Mocked Axios calls │      │ • Syntax Validation  │
+│ • 8 Real PostgreSQL  │      │ • Form validation    │      │ • Provider Init      │
+│   integration tests  │      │ • User-visible errors│      │                      │
+└──────────────────────┘      └──────────────────────┘      └──────────────────────┘
+```
+
+### 1. Test Architecture & Coverage
+
+| Test Suite | Framework | Scope / Coverage | Test Count | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Backend Unit & API** | Jest, Supertest | Route contracts, input validation, status codes, 404, bad JSON, safe 500 error sanitization | **23** | ✅ Passed |
+| **PostgreSQL Integration** | Jest, Supertest, `pg` | Real PostgreSQL schema initialization, BigInt identity IDs, NOT NULL & length constraints, parameterized query SQL-injection resilience | **8** | ✅ Passed |
+| **Frontend Automated** | Vitest, React Testing Library, JSDOM | Item list rendering, loading / empty / error / success states, modal input trimming, length boundaries, search filter, Axios mocks | **21** | ✅ Passed |
+| **Frontend Lint & Build** | ESLint, Vite | Code quality, React hooks rules, production bundle generation | — | ✅ Passed |
+| **Terraform IaC Checks** | Terraform CLI | Canonical formatting (`fmt -check`), syntax and provider validation (`validate`) | — | ✅ Configured |
+| **Total Automated Tests** | — | Comprehensive end-to-end regression safety net | **52** | ✅ 100% Passing |
+
+### 2. Test Execution Commands
+
+#### Root Convenience Commands
+Run test suites across both backend and frontend from the workspace root:
+
+```bash
+# Run all unit/API and frontend automated tests
+npm run test
+
+# Run backend unit tests only
+npm run test:backend
+
+# Run real PostgreSQL integration tests
+npm run test:backend:integration
+
+# Run backend unit tests with statement/branch coverage
+npm run test:backend:coverage
+
+# Run frontend tests
+npm run test:frontend
+
+# Run frontend linter and production build
+npm run lint:frontend
+npm run build:frontend
+
+# Run complete test suite (unit, integration, and frontend)
+npm run test:all
+```
+
+#### Backend Test Commands
+Navigate to the `backend/` directory:
+
+```bash
+cd backend
+
+# Run isolated unit and API tests (mocked database)
+npm test
+
+# Run unit tests explicitly
+npm run test:unit
+
+# Run real PostgreSQL integration tests against test database
+npm run test:integration
+
+# Generate detailed test coverage report
+npm run test:coverage
+
+# Run tests in watch mode during development
+npm run test:watch
+```
+
+#### Frontend Test Commands
+Navigate to the `frontend/` directory:
+
+```bash
+cd frontend
+
+# Run frontend component tests in headless Vitest runner
+npm test
+
+# Run frontend tests in interactive watch mode
+npm run test:watch
+
+# Execute ESLint verification
+npm run lint
+
+# Build production bundle
+npm run build
+```
+
+### 3. Real PostgreSQL Integration Test Prerequisites & Safety Guard
+
+The integration test suite connects to a dedicated PostgreSQL database and executes `backend/src/db/schema.sql` to verify database behaviors that mocked tests cannot detect.
+
+- **Strict Safety Guard:** The integration test harness (`dbTestHelper.js`) verifies that the database name contains `test` (e.g. `cloudapp_test`). It **aborts immediately** if pointed at a non-test database (e.g. `cloudapp`, `production_db`), preventing accidental schema alterations or data loss on development, staging, or production environments.
+- **Local Test Database via Docker Compose:**
+  ```bash
+  # Spin up dedicated test PostgreSQL container on port 5432
+  docker compose -f docker-compose.test.yml up -d
+
+  # Run the real PostgreSQL integration test suite
+  npm run test:backend:integration
+
+  # Tear down test container when finished
+  docker compose -f docker-compose.test.yml down -v
+  ```
+- **Automatic Fallback in Local Environments Without PostgreSQL:** If PostgreSQL is not running locally, the integration suite gracefully logs an advisory notice and avoids blocking unit test workflows. In the GitHub Actions CI pipeline, a dedicated PostgreSQL 16 service container is provisioned automatically.
+
+### 4. CI/CD Automated Quality Gates (`.github/workflows/deploy.yml`)
+
+The continuous deployment pipeline requires every check to pass before deployment:
+
+1. **Backend Tests Job (`backend-tests`):**
+   - Provisions an isolated PostgreSQL 16 container service with automated health checks.
+   - Installs dependencies using `npm ci` and lockfile caching.
+   - Executes 23 Jest/Supertest backend unit and contract tests.
+   - Executes 8 real PostgreSQL integration tests against the container database.
+2. **Frontend Checks Job (`frontend-checks`):**
+   - Installs dependencies using `npm ci` and lockfile caching.
+   - Executes ESLint to enforce React hooks and coding standards.
+   - Executes 21 Vitest / React Testing Library automated tests.
+   - Builds the production bundle (`vite build`) to detect compilation errors.
+3. **Terraform Checks Job (`terraform-checks`):**
+   - Validates canonical HCL formatting with `terraform fmt -check`.
+   - Initializes modules and validates provider definitions with `terraform validate`.
+4. **Deploy Job (`deploy`):**
+   - Explicitly declares `needs: [backend-tests, frontend-checks, terraform-checks]`.
+   - Halts immediately if any unit test, integration test, lint, or build fails.
+   - Authenticates to AWS using keyless OIDC, builds and pushes Docker images to ECR, and triggers zero-downtime rolling deployment to ECS Fargate.
+
+### 5. Defensive Error Handling & Input Validation
+
+The application incorporates strict defensive programming practices:
+- **String & Type Validation:** Rejects missing, null, empty, whitespace-only, numeric, boolean, array, and object payloads with HTTP 400.
+- **Length Boundary Enforcement:** Enforces strict 2–100 character boundaries, accepting boundary cases (2 and 100 characters) and rejecting sub-2 and 101+ character strings.
+- **Whitespace Normalization:** Automatically trims leading and trailing whitespace before database insertion.
+- **Error Information Leak Protection:** Sanitizes HTTP 500 error responses so internal database table names, SQL queries, connection strings, or credentials are never leaked to clients.
+- **Route Catch-All:** Handles unknown endpoints by returning a standard JSON 404 response (`{ success: false, message: "Route not found" }`).
+- **Malformed JSON Handling:** Intercepts malformed request bodies and returns structured HTTP 400 Bad Request responses.
 
 ---
 

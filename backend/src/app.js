@@ -28,6 +28,15 @@ app.use("/health", healthRoutes);
 app.use("/api/items", itemRoutes);
 app.use("/api/metrics", metricRoutes);
 
+// Catch unknown routes and return 404 JSON
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found",
+  });
+});
+
 app.use(errorHandler);
 
 module.exports = app;
+
